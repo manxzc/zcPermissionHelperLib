@@ -4,7 +4,7 @@
 
 ✅ 第一步：在目标项目中添加 JitPack 仓库
 修改 settings.gradle（推荐方式，适用于 AGP 7.0+）
-gradle
+
 // settings.gradle
 pluginManagement {
     repositories {
@@ -32,6 +32,7 @@ dependencies {
 }
 
 ✅ 第三步：Sync 并使用   mainactivity
+
 import com.zc.permissionhelper.PermissionHelper
 
 // 示例：申请相机权限
