@@ -38,7 +38,7 @@ dependencyResolutionManagement {
 
 dependencies {
 
-    implementation 'com.github.manxzc:zcPermissionHelperLib:v1.0.3'
+    implementation 'com.github.manxzc:zcPermissionHelperLib:v1.0.4'
     
 }
 
