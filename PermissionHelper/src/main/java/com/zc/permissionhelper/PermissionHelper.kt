@@ -3,9 +3,12 @@ package com.zc.permissionhelper// PermissionHelper.kt
 import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -70,6 +73,40 @@ object PermissionHelper {
     private fun getNotGrantedPermissions(context: Context, permissions: Array<String>): List<String> {
         return permissions.filter { permission ->
             ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+
+    // ==============================
+    // 2. Android 15+ 媒体文件选择（无需权限）
+    // ==============================
+    fun pickMedia(
+        activity: Activity,
+        mimeType: String = "image/*"
+    ): Intent {
+        return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mimeType
+        }
+    }
+
+    // ==============================
+    // 3. 精确闹钟权限引导（Android 12+）
+    // ==============================
+    fun requestExactAlarm(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            if (!alarmManager.canScheduleExactAlarms()) {
+                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                }
+                if (context is Activity) {
+                    context.startActivity(intent)
+                } else {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
+            }
         }
     }
 
