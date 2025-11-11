@@ -49,7 +49,7 @@ afterEvaluate {
 
                 groupId = 'com.github.manxzc'
                 artifactId = 'ZcPermissionHolper'  // 建议与仓库名一致
-                version = '1.0.7'
+                version = '1.0.8'
             }
         }
     }
