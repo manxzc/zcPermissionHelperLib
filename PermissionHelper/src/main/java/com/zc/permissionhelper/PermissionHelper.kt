@@ -193,90 +193,58 @@
 //        }
 //    }
 //}
+
 package com.zc.permissionhelper
 
 import android.app.Activity
-import android.content.Context
 import android.content.pm.PackageManager
+import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 
-// ====== 核心数据结构：权限请求单元 ======
 data class PermissionRequest(
     val permission: String,
     val rationale: String? = null
 )
 
-// ====== 权限帮助类 ======
-object PermissionHelper {
+open class PermissionHelper private constructor(
+    private val launcher: ActivityResultLauncher<Array<String>>,
+    private val context: android.content.Context
+) {
 
-    interface PermissionCallback {
-        fun onGranted()
-        fun onDenied(deniedPermissions: List<String>)
-    }
-
-    // ------------------ Activity ------------------
-    fun requestPermissionsWithRationale(
-        activity: AppCompatActivity,
+    // ====== 对外统一入口：请求权限 ======
+    open fun requestPermissionsWithRationale(
         requests: List<PermissionRequest>,
-        callback: PermissionCallback
+        onGranted: () -> Unit,
+        onDenied: (List<String>) -> Unit
     ) {
-        val context = activity.applicationContext
         val pendingRequests = requests.filter {
             ContextCompat.checkSelfPermission(context, it.permission) != PackageManager.PERMISSION_GRANTED
         }
 
         if (pendingRequests.isEmpty()) {
-            callback.onGranted()
+            onGranted()
             return
         }
 
-        val explanations = pendingRequests.mapNotNull { it.rationale?.let { rationale -> it.permission to rationale } }
-
+        val explanations = pendingRequests.mapNotNull { it.rationale?.let { r -> it.permission to r } }
         if (explanations.isNotEmpty()) {
             val message = explanations.joinToString("\n\n") { "• ${it.second}" }
-            showRationaleDialog(activity, message) {
-                launch(activity, pendingRequests.map { it.permission }.toTypedArray(), callback)
+            showRationaleDialog(message) {
+                launcher.launch(pendingRequests.map { it.permission }.toTypedArray())
             }
         } else {
-            launch(activity, pendingRequests.map { it.permission }.toTypedArray(), callback)
+            launcher.launch(pendingRequests.map { it.permission }.toTypedArray())
         }
     }
 
-    // ------------------ Fragment ------------------
-    fun requestPermissionsWithRationale(
-        fragment: Fragment,
-        requests: List<PermissionRequest>,
-        callback: PermissionCallback
-    ) {
-        val context = fragment.requireContext().applicationContext
-        val pendingRequests = requests.filter {
-            ContextCompat.checkSelfPermission(context, it.permission) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (pendingRequests.isEmpty()) {
-            callback.onGranted()
-            return
-        }
-
-        val explanations = pendingRequests.mapNotNull { it.rationale?.let { rationale -> it.permission to rationale } }
-
-        if (explanations.isNotEmpty()) {
-            val message = explanations.joinToString("\n\n") { "• ${it.second}" }
-            showRationaleDialog(fragment.requireActivity(), message) {
-                launch(fragment, pendingRequests.map { it.permission }.toTypedArray(), callback)
-            }
-        } else {
-            launch(fragment, pendingRequests.map { it.permission }.toTypedArray(), callback)
-        }
-    }
-
-    // ------------------ 私有工具 ------------------
-    private fun showRationaleDialog(activity: Activity, message: String, onConfirm: () -> Unit) {
+    private fun showRationaleDialog(message: String, onConfirm: () -> Unit) {
+        val activity = context as? Activity ?: return
         if (activity.isFinishing || activity.isDestroyed) return
+
         AlertDialog.Builder(activity)
             .setTitle("需要权限")
             .setMessage(message)
@@ -286,17 +254,85 @@ object PermissionHelper {
             .show()
     }
 
-    private fun launch(activity: AppCompatActivity, permissions: Array<String>, callback: PermissionCallback) {
-        activity.registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            val denied = result.filterValues { !it }.keys.toList()
-            if (denied.isEmpty()) callback.onGranted() else callback.onDenied(denied)
-        }.launch(permissions)
+    // ====== 工厂方法：Activity ======
+    companion object {
+        fun create(activity: ComponentActivity): PermissionHelper {
+            val launcher = activity.registerForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { result ->
+                // 这个回调里无法直接拿到 onGranted/onDenied，所以我们不在这处理逻辑
+                // 而是在 launch 时把回调存起来 —— 但这样有风险（多请求覆盖）
+                // 所以更好的方式：**不在 helper 内部处理结果，而是由外部监听**
+                // ❌ 但我们想要“一次调用+回调”，所以换思路 ↓
+            }
+            // ⚠️ 上面的方式行不通！因为 launcher 回调和 request 请求无法一一对应
+
+            // ✅ 正确做法：**每次 request 都创建一个临时 launcher？不行，会报错！**
+
+            // 🔄 所以我们退一步：**只支持单次并发请求**，用成员变量暂存回调
+            return ActivityBasedHelper(activity)
+        }
+
+        fun create(fragment: Fragment): PermissionHelper {
+            return FragmentBasedHelper(fragment)
+        }
     }
 
-    private fun launch(fragment: Fragment, permissions: Array<String>, callback: PermissionCallback) {
-        fragment.registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+    // ====== 内部实现：Activity 版（带回调暂存） ======
+    private class ActivityBasedHelper(activity: ComponentActivity) : PermissionHelper(
+        launcher = activity.registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { result ->
             val denied = result.filterValues { !it }.keys.toList()
-            if (denied.isEmpty()) callback.onGranted() else callback.onDenied(denied)
-        }.launch(permissions)
+            if (denied.isEmpty()) {
+                currentCallback?.first?.invoke()
+            } else {
+                currentCallback?.second?.invoke(denied)
+            }
+            currentCallback = null
+        },
+        context = activity
+    ) {
+        companion object {
+            var currentCallback: Pair<(() -> Unit), ((List<String>) -> Unit)>? = null
+        }
+
+        override fun requestPermissionsWithRationale(
+            requests: List<PermissionRequest>,
+            onGranted: () -> Unit,
+            onDenied: (List<String>) -> Unit
+        ) {
+            currentCallback = Pair(onGranted, onDenied)
+            super.requestPermissionsWithRationale(requests, onGranted, onDenied)
+        }
+    }
+
+    // ====== 内部实现：Fragment 版 ======
+    private class FragmentBasedHelper(fragment: Fragment) : PermissionHelper(
+        launcher = fragment.registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { result ->
+            val denied = result.filterValues { !it }.keys.toList()
+            if (denied.isEmpty()) {
+                currentCallback?.first?.invoke()
+            } else {
+                currentCallback?.second?.invoke(denied)
+            }
+            currentCallback = null
+        },
+        context = fragment.requireContext()
+    ) {
+        companion object {
+            var currentCallback: Pair<(() -> Unit), ((List<String>) -> Unit)>? = null
+        }
+
+        override fun requestPermissionsWithRationale(
+            requests: List<PermissionRequest>,
+            onGranted: () -> Unit,
+            onDenied: (List<String>) -> Unit
+        ) {
+            currentCallback = Pair(onGranted, onDenied)
+            super.requestPermissionsWithRationale(requests, onGranted, onDenied)
+        }
     }
 }
